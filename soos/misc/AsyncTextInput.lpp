@@ -1,0 +1,89 @@
+#hdr
+#include <3ds.h>
+
+extern "C"
+{
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <string.h>
+}
+
+#include <string>
+#include <functional>
+
+#include "thing.h"
+
+
+using namespace std;
+#end
+
+
+namespace MM
+{
+    namespace MISC
+    {
+        typedef function<void(const string& str)> AsyncTextInputCallback;
+        
+        class AsyncTextInput
+        {
+        private:
+            static Thread th = nullptr;
+            static AsyncTextInputCallback cb;
+            static u32 maxlen;
+            static string initial;
+            
+            static void ThreadStuff(void* uselessparam)
+            {
+                char* buf = new char[maxlen + 1];
+                buf[maxlen] = '\0';
+                SwkbdState swkbd;
+                swkbdInit(&swkbd, SWKBD_TYPE_NORMAL, 2, maxlen);
+                swkbd.language = 1; //Japanese
+                swkbd.darken_top_screen = 0;
+                swkbd.multiline = true;
+                swkbd.unknown = true;
+                swkbd.default_qwerty = true;
+                swkbdSetInitialText(&swkbd, initial.c_str());
+                if(swkbdInputText(&swkbd, buf, maxlen) != SWKBD_BUTTON_RIGHT) buf[0] = '\0';
+                string ret(buf);
+                delete buf;
+                DEBUGS("swkbd callback");
+                cb(ret);
+                DEBUGS("swkbd callback done");
+                initial.clear();
+                initial.shrink_to_fit();
+                th = nullptr;
+                DEBUGS("swkbd died");
+            }
+            
+        public:
+            static bool Running()
+            {
+                return th ? true : false;
+            }
+            
+            static bool Start(u32 _maxlen, const string& _initial, AsyncTextInputCallback _cb)
+            {
+                if(th)
+                {
+                    DEBUGS("swkbd thread not null");
+                    return false;
+                }
+                cb = _cb;
+                maxlen = _maxlen;
+                initial = _initial;
+                
+                th = threadCreate(ThreadStuff, nullptr, 0x2000, 0x18, 1, true);
+                if(!th) DEBUGS("swkbg threadCreate fail");
+                return th ? true : false;
+            }
+            
+            static bool Start(u32 _maxlen, AsyncTextInputCallback _cb)
+            {
+                return Start(_maxlen, "", _cb);
+            }
+            
+        }
+    }
+}

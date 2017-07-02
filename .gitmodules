@@ -1,0 +1,3 @@
+[submodule "soos/WS"]
+	path = soos/WS
+	url = https://github.com/MarcuzD/WSA_CTR.git

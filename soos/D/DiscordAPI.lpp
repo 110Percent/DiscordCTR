@@ -1,0 +1,696 @@
+/*
+    DiscordAPI.lpp - high-level C++ Discord API abstraction layer
+    Copyright (C) 2017 Sono (https://github.com/MarcuzD)
+    All rights reserved.
+    Source code was only provided for education purposes.
+*/
+
+#hdr
+#include <3ds.h>
+
+extern "C"
+{
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdint.h>
+#include <unistd.h>
+#include <string.h>
+#include <errno.h>
+#include <poll.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netdb.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
+#include <fcntl.h>
+
+#include "thing.h"
+}
+
+#include <string>
+#include <functional>
+#include <map>
+#include <vector>
+
+#include "misc/util.hpp"
+#include "WS/WebSocket.hpp"
+#include "SimpleJSON/JSON.hpp"
+
+using namespace std;
+using namespace MM::WS;
+#end
+
+
+namespace MM
+{
+    namespace D
+    {
+        typedef u64 Snowflake;
+        static inline Snowflake strtosnow(const string& str)
+        {
+            return strtoull(str.c_str(), nullptr, 10);
+        }
+        
+        class Color
+        {
+        public:
+            u8 r;
+            u8 g;
+            u8 b;
+            u8 a;
+            
+            Color(u32 i, u8 a) : Color(i) { this->a = a; }
+            Color(u8 r, u8 g, u8 b, u8 a) : r(r), g(g), b(b), a(a) {}
+            Color(u8 r, u8 g, u8 b) : Color(r, g, b, 0xFF) {}
+            Color() : Color(0) {}
+            Color(u32 col)
+            {
+                this->FromNumber(col);
+            }
+            
+            void FromNumber(u32 col)
+            {
+                r = col & 0xFF;
+                g = (col >> 8) & 0xFF;
+                b = (col >> 16) & 0xFF;
+                a = (col >> 24) & 0xFF;
+                if(!a) a = 0xFF;
+            }
+            
+            u32 ToRGB() const
+            {
+                return (a << 24) | (b << 16) | (g << 8) | r;
+            }
+            
+            u32 ToGPU() const
+            {
+                return (r << 24) | (g << 16) | (b << 8) | a;
+            }
+        }
+        
+        enum DiscordPerm
+        {
+            DP_NONE = 0,
+            DP_CREATE_INSTANT_INVITE = 0x00000001, //Allows creation of instant invites
+            DP_KICK_MEMBERS          = 0x00000002, //Allows kicking members
+            DP_BAN_MEMBERS           = 0x00000004, //Allows banning members
+            DP_ADMINISTRATOR         = 0x00000008, //Allows all permissions and bypasses channel permission overwrites
+            DP_MANAGE_CHANNELS       = 0x00000010, //Allows management and editing of channels
+            DP_MANAGE_GUILD          = 0x00000020, //Allows management and editing of the guild
+            DP_ADD_REACTIONS         = 0x00000040, //Allows for the addition of reactions to messages
+            DP_VIEW_AUDIT_LOG        = 0x00000080, //Allows for viewing of audit logs
+            DP_READ_MESSAGES         = 0x00000400, //Allows reading messages in a channel. The channel will not appear for users without this permission
+            DP_SEND_MESSAGES         = 0x00000800, //Allows for sending messages in a channel
+            DP_SEND_TTS_MESSAGES     = 0x00001000, //Allows for sending of /tts messages
+            DP_MANAGE_MESSAGES       = 0x00002000, //Allows for deletion of other users messages
+            DP_EMBED_LINKS           = 0x00004000, //Links sent by this user will be auto-embedded
+            DP_ATTACH_FILES          = 0x00008000, //Allows for uploading images and files
+            DP_READ_MESSAGE_HISTORY  = 0x00010000, //Allows for reading of message history
+            DP_MENTION_EVERYONE      = 0x00020000, //Allows for using the @everyone tag to notify all users in a channel, and the @here tag to notify all online users in a channel
+            DP_USE_EXTERNAL_EMOJIS   = 0x00040000, //Allows the usage of custom emojis from other servers
+            DP_CONNECT               = 0x00100000, //Allows for joining of a voice channel
+            DP_SPEAK                 = 0x00200000, //Allows for speaking in a voice channel
+            DP_MUTE_MEMBERS          = 0x00400000, //Allows for muting members in a voice channel
+            DP_DEAFEN_MEMBERS        = 0x00800000, //Allows for deafening of members in a voice channel
+            DP_MOVE_MEMBERS          = 0x01000000, //Allows for moving of members between voice channels
+            DP_USE_VAD               = 0x02000000, //Allows for using voice-activity-detection in a voice channel
+            DP_CHANGE_NICKNAME       = 0x04000000, //Allows for modification of own nickname
+            DP_MANAGE_NICKNAMES      = 0x08000000, //Allows for modification of other users nicknames
+            DP_MANAGE_ROLES          = 0x10000000, //Allows management and editing of roles
+            DP_MANAGE_WEBHOOKS       = 0x20000000, //Allows management and editing of webhooks
+            DP_MANAGE_EMOJIS         = 0x40000000, //Allows management and editing of emojis
+            
+            //These permissions require the owner account to use two-factor authentication when used on a guild that has server-wide 2FA enabled
+            DP_TWOFA_FLAG = (DP_KICK_MEMBERS | DP_BAN_MEMBERS | DP_ADMINISTRATOR | DP_MANAGE_CHANNELS | DP_MANAGE_GUILD | DP_MANAGE_MESSAGES | DP_MANAGE_ROLES | DP_MANAGE_WEBHOOKS | DP_MANAGE_EMOJIS)
+        }
+        
+        class DiscordRole
+        {
+        public:
+            Snowflake ID;
+            u32 pos;
+            DiscordPerm perm;
+            Color color;
+            string name;
+            
+            void Parse(JSONObject& o)
+            {
+                if(o.count("id")) ID = strtosnow(o.at("id")->AsString());
+                if(o.count("position")) pos = (u32)o.at("position")->AsNumber();
+                if(o.count("permissions")) perm = (DiscordPerm)(u32)o.at("permissions")->AsNumber();
+                if(o.count("color")) color.FromNumber((u32)o.at("color")->AsNumber());
+                if(o.count("name")) name = o.at("name")->AsString();
+            }
+        }
+        class DiscordUser
+        {
+        public:
+            Snowflake ID;
+            string name;
+            string avy;
+            char discr[5];
+            
+            virtual void Parse(JSONObject& o)
+            {
+                if(o.count("id")) ID = strtosnow(o.at("id")->AsString());
+                if(o.count("name")) name = o.at("name")->AsString();
+                if(o.count("avatar")) avy = o.at("avatar")->AsString();
+                if(o.count("discriminator"))
+                {
+                    strncpy(discr, o.at("discriminator")->AsString().c_str(), 4);
+                    discr[4] = '\0';
+                }
+            }
+        }
+        class DiscordServerUser : DiscordUser
+        {
+        public:
+            vector<Snowflake> roles;
+            string nick;
+            
+            void Parse(JSONObject& o)
+            {
+                DiscordUser::Parse(o);
+                
+                if(o.count("roles"))
+                {
+                    roles.clear();
+                    
+                    for(JSONValue* v : o.at("roles")->AsArray())
+                    {
+                        if(!v) continue;
+                        
+                        roles.push_back(strtosnow(v->AsString()));
+                    }
+                }
+                if(o.count("nick"))
+                    nick = o.at("nick")->AsString();
+                else
+                    nick = "";
+            }
+        }
+        enum DiscordChannelRoleType
+        {
+            DCRT_UNKNOWN,
+            DCRT_ROLE,
+            DCRT_USER
+        }
+        class DiscordChannelRole
+        {
+        public:
+            Snowflake ID;
+            DiscordChannelRoleType type;
+            DiscordPerm allow;
+            DiscordPerm disallow;
+            
+            void Parse(JSONObject& o)
+            {
+                if(o.count("id")) ID = strtosnow(o.at("id")->AsString());
+                if(o.count("type"))
+                {
+                    string ct = o.at("type")->AsString();
+                    if(ct == "role") type = DiscordChannelRoleType::DCRT_ROLE;
+                    else if(ct == "user") type = DiscordChannelRoleType::DCRT_USER;
+                    else type = DiscordChannelRoleType::DCRT_UNKNOWN;
+                }
+                if(o.count("allow")) allow = (DiscordPerm)(u32)o.at("allow")->AsNumber();
+                if(o.count("deny")) disallow = (DiscordPerm)(u32)o.at("deny")->AsNumber();
+            }
+        }
+        enum DiscordChannelType
+        {
+            DCT_UNKNOWN,
+            DCT_TEXT,
+            DCT_VOICE
+        }
+        class DiscordChannel
+        {
+        public:
+            Snowflake ID;
+            Snowflake ServerID;
+            Snowflake lastmsg;
+            bool isprivate;
+            u32 pos;
+            string name;
+            string topic;
+            DiscordChannelType type;
+            map<Snowflake, DiscordChannelRole> roles;
+            
+            void Parse(JSONObject& o)
+            {
+                if(o.count("id")) ID = strtosnow(o.at("id")->AsString());
+                if(o.count("guild_id")) ServerID = strtosnow(o.at("guild_id")->AsString());
+                if(o.count("is_private"))
+                {
+                    isprivate = o.at("is_private")->AsBool();
+                    if(isprivate && o.count("recipient") && o.at("recipient")->IsObject())
+                    {
+                        JSONObject& rec = (JSONObject&)o.at("recipient")->AsObject();
+                        if(rec.count("username") && rec.at("username")->IsString()) name = rec.at("username")->AsString();
+                        if(rec.count("id")) ServerID = strtosnow(rec.at("id")->AsString());
+                    }
+                }
+                if(!isprivate && o.count("guild_id")) ServerID = strtosnow(o.at("guild_id")->AsString());
+                if(o.count("position")) pos = (u32)o.at("position")->AsNumber();
+                if(o.count("name") && o.at("name")->IsString()) name = o.at("name")->AsString();
+                if(o.count("topic") && o.at("topic")->IsString()) topic = o.at("topic")->AsString();
+                if(o.count("last_message_id") && o.at("last_message_id")->IsString()) lastmsg = strtosnow(o.at("last_message_id")->AsString());
+                if(o.count("type"))
+                {
+                    string ct = o.at("type")->AsString();
+                    if(ct == "text") type = DiscordChannelType::DCT_TEXT;
+                    else if(ct == "voice") type = DiscordChannelType::DCT_VOICE;
+                    else type = DiscordChannelType::DCT_UNKNOWN;
+                }
+                if(o.count("permission_overwrites"))
+                {
+                    roles.clear();
+                    
+                    for(JSONValue* v : o.at("permission_overwrites")->AsArray())
+                    {
+                        if(!v) continue;
+                        
+                        JSONObject& jo = (JSONObject&)v->AsObject();
+                        Snowflake id = strtosnow(jo.at("id")->AsString());
+                        roles[id].Parse(jo);
+                    }
+                }
+            }
+        }
+        class DiscordServer
+        {
+        public:
+            Snowflake ID;
+            Snowflake OwnerID;
+            bool down;
+            string name;
+            string icon;
+            map<Snowflake, DiscordChannel> channels;
+            map<Snowflake, DiscordRole> roles;
+            //map<Snowflake, DiscordEmoji> emoji;
+            
+            void Parse(JSONObject& o)
+            {
+                if(o.count("id")) ID = strtosnow(o.at("id")->AsString());
+                if(o.count("name")) name = o.at("name")->AsString();
+                if(o.count("icon") && o.at("icon")->IsString()) icon = o.at("icon")->AsString();
+                if(o.count("owner_id")) OwnerID = strtosnow(o.at("owner_id")->AsString());
+                if(o.count("unavailable")) down = o.at("unavailable")->AsBool();
+                if(o.count("channels"))
+                {
+                    for(JSONValue* v : o.at("channels")->AsArray())
+                    {
+                        if(!v) continue;
+                        
+                        JSONObject& jo = (JSONObject&)v->AsObject();
+                        Snowflake id = strtosnow(jo.at("id")->AsString());
+                        channels[id].Parse(jo);
+                        channels[id].ServerID = ID;
+                    }
+                }
+                if(o.count("roles"))
+                {
+                    for(JSONValue* v : o.at("roles")->AsArray())
+                    {
+                        if(!v) continue;
+                        
+                        JSONObject& jo = (JSONObject&)v->AsObject();
+                        Snowflake id = strtosnow(jo.at("id")->AsString());
+                        roles[id].Parse(jo);
+                    }
+                }
+                /*if(o.count("emojis"))
+                {
+                    DEBUGS("- - Pre-parse emoji");
+                    for(JSONValue* v : o.at("emojis")->AsArray())
+                    {
+                        if(!v) continue;
+                        
+                        JSONObject& jo = (JSONObject&)v->AsObject();
+                        Snowflake id = strtosnow(jo.at("id")->AsString());
+                        emoji[id].Parse(jo);
+                    }
+                }*/
+            }
+        }
+        
+        
+        class DiscordAPI
+        {
+        private:
+            map<Snowflake, map<Snowflake, DiscordChannel>::iterator> channels;
+            map<Snowflake, map<Snowflake, DiscordRole>::iterator> roles;
+            //map<Snowflake, map<Snowflake, DiscordEmoji>::iterator> emoji;
+            
+        public:
+            WebSocket* ws;
+            bool isbot;
+            
+            string token;
+            string sessid;
+            
+            //PUBLIC shit
+            
+            map<Snowflake, DiscordServer> servers;
+            map<Snowflake, DiscordUser> users;
+            map<Snowflake, DiscordChannel> PMs;
+            
+            DiscordUser self;
+            
+            //INTERNAL shit
+            
+            DiscordAPI()
+            {
+                Reset();
+            }
+            
+            void Reset()
+            {
+                if(!channels.empty()) channels.clear();
+                if(!roles.empty()) roles.clear();
+                //if(!emoji.emtpy()) emoji.clear();
+                if(!servers.empty()) servers.clear();
+                if(!users.empty()) users.clear();
+                if(!PMs.empty()) PMs.clear();
+            }
+            
+            void AddChannel(map<Snowflake, DiscordChannel>::iterator i) { channels[i->first] = i; }
+            void AddRole(map<Snowflake, DiscordRole>::iterator i) { roles[i->first] = i; }
+            //void AddEmoji(map<Snowflake, DiscordEmoji>::iterator i) { emoji[i->first] = i; }
+            DiscordChannel* GetChannel(Snowflake id) { return &channels[id]->second; }
+            DiscordRole* GetRole(Snowflake id) { return &roles[id]->second; }
+            //DiscordEmoji* GetEmoji(Snowflake id) { return &emoji[id]->second; }
+            bool HasChannel(Snowflake id) { return channels.count(id) ? true : false; }
+            bool HasRole(Snowflake id) { return roles.count(id) ? true : false; }
+            //bool HasEmoji(Snowflake id) { return emoji.count(id) ? true : false; }
+            void EraseChannel(Snowflake id) { channels.erase(id); }
+            void EraseRole(Snowflake id) { roles.erase(id); }
+            //void EraseEmoji(Snowflake id) { emoji.erase(id); }
+            
+            void DispatchMessage(string& evt, JSONObject& d)
+            {
+                //DEBUG("DA DISPATCH msg=%s\n", evt.c_str());
+                
+                SSWITCH(evt)
+                {
+                    SCASE("READY")
+                    {
+                        Reset();
+                        
+                        if(d.count("session_id")) sessid = d.at("session_id")->AsString();
+                        if(d.count("user"))
+                        {
+                            JSONObject& uo = (JSONObject&)d.at("user")->AsObject();
+                            self.Parse(uo);
+                            if(uo.count("bot"))
+                                isbot = uo.at("bot")->AsBool();
+                            else
+                                isbot = false;
+                        }
+                        if(d.count("private_channels"))
+                        {
+                            DEBUGS("Pre-parse private channels");
+                            for(JSONValue* v : d.at("private_channels")->AsArray())
+                            {
+                                if(!v) continue;
+                                
+                                JSONObject& o = (JSONObject&)v->AsObject();
+                                Snowflake id = strtosnow(o.at("id")->AsString());
+                                PMs[id].Parse(o);
+                                AddChannel(PMs.find(id));
+                            }
+                        }
+                        if(d.count("guilds"))
+                        {
+                            for(JSONValue* v : d.at("guilds")->AsArray())
+                            {
+                                if(!v) continue;
+                                
+                                JSONObject& o = (JSONObject&)v->AsObject();
+                                Snowflake id = strtosnow(o.at("id")->AsString());
+                                servers[id].Parse(o);
+                                DiscordServer& s = servers[id];
+                                {auto it = s.channels.begin(); auto end = s.channels.end(); for(; it != end; it++) AddChannel(it);}
+                                {auto it = s.roles.begin(); auto end = s.roles.end(); for(; it != end; it++) AddRole(it);}
+                                //{auto it = s.emoji.begin(); auto end = s.emoji.end(); for(; it != end; it++) AddEmoji(it);}
+                            }
+                        }
+                        
+                        DEBUGS("READY DONE");
+                        
+                        break;
+                    }
+                    SCASE("USER_UPDATE")
+                    {
+                        self.Parse(d);
+                        break;
+                    }
+                    SCASE("CHANNEL_CREATE")
+                    {
+                        Snowflake id = strtosnow(d.at("id")->AsString());
+                        bool priv = d.count("is_private") && d.at("is_private")->AsBool();
+                        if(priv)
+                        {
+                            PMs[id].Parse(d);
+                            AddChannel(PMs.find(id));
+                        }
+                        else
+                        {
+                            Snowflake sid = strtosnow(d.at("guild_id")->AsString());
+                            servers[sid].channels[id].Parse(d);
+                            AddChannel(servers[sid].channels.find(id));
+                        }
+                        
+                        break;
+                    }
+                    SCASE("CHANNEL_UPDATE")
+                    {
+                        Snowflake id = strtosnow(d.at("id")->AsString());
+                        GetChannel(id)->Parse(d);
+                        break;
+                    }
+                    SCASE("CHANNEL_DELETE")
+                    {
+                        Snowflake id = strtosnow(d.at("id")->AsString());
+                        Snowflake ServerID = GetChannel(id)->ServerID;
+                        bool priv = GetChannel(id)->isprivate;
+                        EraseChannel(id);
+                        
+                        if(priv)
+                            PMs.erase(id);
+                        else
+                            servers[ServerID].channels.erase(id);
+                        
+                        break;
+                    }
+                    SCASE("GUILD_CREATE")
+                    {
+                        Snowflake id = strtosnow(d.at("id")->AsString());
+                        servers[id].Parse(d);
+                        break;
+                    }
+                    SCASE("GUILD_UPDATE")
+                    {
+                        //TODO handle channel/role/emoji change
+                        Snowflake id = strtosnow(d.at("id")->AsString());
+                        servers[id].Parse(d);
+                        break;
+                    }
+                    SCASE("GUILD_DELETE")
+                    {
+                        Snowflake id = strtosnow(d.at("id")->AsString());
+                        bool down = false;
+                        if(d.count("unavailable")) down = d.at("unavailable")->AsBool();
+                        
+                        if(down)
+                        {
+                           servers[id].down = down;
+                        }
+                        else
+                        {
+                            for(auto it : servers[id].channels) EraseChannel(it.first);
+                            for(auto it : servers[id].roles) EraseRole(it.first);
+                            //for(auto it : servers[id].emoji) EraseEmoji(it.first);
+                            
+                            servers.erase(id);
+                        }
+                        
+                        break;
+                    }
+                    SCASE("GUILD_ROLE_CREATE")
+                    {
+                        Snowflake id = strtosnow(d.at("guild_id")->AsString());
+                        JSONObject& ro = (JSONObject&)d.at("role")->AsObject();
+                        Snowflake rid = strtosnow(ro.at("id")->AsString());
+                        
+                        servers[id].roles[rid].Parse(ro);
+                        AddRole(servers[id].roles.find(rid));
+                        
+                        break;
+                    }
+                    SCASE("GUILD_ROLE_UPDATE")
+                    {
+                        Snowflake id = strtosnow(d.at("guild_id")->AsString());
+                        JSONObject& ro = (JSONObject&)d.at("role")->AsObject();
+                        Snowflake rid = strtosnow(ro.at("id")->AsString());
+                        
+                        servers[id].roles[rid].Parse(ro);
+                        
+                        break;
+                    }
+                    SCASE("GUILD_ROLE_DELETE")
+                    {
+                        Snowflake sid = strtosnow(d.at("guild_id")->AsString());
+                        Snowflake rid = strtosnow(d.at("role_id")->AsString());
+                        
+                        EraseRole(rid);
+                        servers[sid].roles.erase(rid);
+                        
+                        break;
+                    }
+                }
+                SSEND();
+            }
+            
+            int APIRequest(const string& method, const string& endpoint, string& dest, const string& data)
+            {
+                int s = 0;
+                
+                DEBUG("APIRequest: %s '%s'\n%s\n================\n", method.c_str(), endpoint.c_str(), data.c_str());
+                
+                do
+                {
+                    struct addrinfo hint;
+                    memset(&hint, 0, sizeof(hint));
+                    hint.ai_family = AF_INET;
+                    hint.ai_socktype = SOCK_STREAM;
+                    hint.ai_protocol = IPPROTO_IP;
+                    
+                    int sock = socket(AF_INET, SOCK_STREAM, IPPROTO_IP);
+                    if(sock < 0)
+                    {
+                        if(errno < 0) errno = -errno; //WTF pls
+                        DEBUG("socket fail: (%i) %s\n", errno, strerror(errno));
+                        return -1;
+                    }
+                    
+                    struct addrinfo* res = nullptr;
+                    struct addrinfo* ai = nullptr;
+                    
+                    int ret = getaddrinfo("discordapp.com", "443", &hint, &res);
+                    if(ret)
+                    {
+                        DEBUG("getaddrinfo fail: (%i) %s\n", ret, gai_strerror(ret));
+                        close(sock);
+                        return ret;
+                    }
+                    
+                    ai = res;
+                    while(ai)
+                    {
+                        ret = connect(sock, ai->ai_addr, ai->ai_addrlen);
+                        if(ret < 0)
+                        {
+                            DEBUG("connect (loop) fail: (%i) %s\n", errno, strerror(errno));
+                            ai = ai->ai_next;
+                            continue;
+                        }
+                        
+                        break;
+                    }
+                    
+                    freeaddrinfo(res);
+                    
+                    if(!ai)
+                    {
+                        close(sock);
+                        return 0;
+                    }
+                    
+                    s = sock;
+                }
+                while(0);
+                
+                sslcContext ctx;
+                
+                Result ret = sslcCreateContext(&ctx, s, SSLCOPT_DisableVerify, "discordapp.com");
+                if(ret < 0)
+                {
+                    DEBUG("sslcCreateContext fail: %08X\n", ret);
+                    close(s);
+                    return -1;
+                }
+                int retval = -1;
+                u32 something = 0;
+                
+                ret = sslcStartConnection(&ctx, &retval, &something);
+                if(ret < 0)
+                {
+                    DEBUG("sslcStartConnection fail: %08X\n", ret);
+                    sslcDestroyContext(&ctx);
+                    close(s);
+                    return -1;
+                }
+                
+                string hdrstr = method + " /api/" + endpoint + " HTTP/1.1\r\n";
+                hdrstr += "Host: discordapp.com\r\n";
+                hdrstr += "Authorization: ";
+                if(isbot) hdrstr += "Bot ";
+                hdrstr += token + "\r\n";
+                hdrstr += "User-Agent: DiscordCTR (https://github.com/MarcuzD/DiscordCTR, v0.0)\r\n";
+                hdrstr += "Accept: */*\r\n";
+                hdrstr += "Content-Type: application/json\r\n";
+                hdrstr += "Connection: close\r\n";
+                hdrstr += "Content-Length: " + to_string(data.length()) + "\r\n";
+                hdrstr += "\r\n";
+                
+                ret = sslcWrite(&ctx, hdrstr.c_str(), hdrstr.size());
+                if(ret < 0)
+                {
+                    DEBUG("sslcWrite fail: %08X\n", ret);
+                    sslcDestroyContext(&ctx);
+                    close(s);
+                    return -1;
+                }
+                
+                if(data.length())
+                {
+                    ret = sslcWrite(&ctx, data.c_str(), data.length());
+                    if(ret < 0)
+                    {
+                        DEBUG("sslcWrite fail: %08X\n", ret);
+                        sslcDestroyContext(&ctx);
+                        close(s);
+                        return -1;
+                    }
+                }
+                
+                char* buf = new char[0x1000];
+                
+                while(1)
+                {
+                    ret = sslcRead(&ctx, buf, 0x1000, 0);
+                    if(ret < 0)
+                    {
+                        DEBUG("sslcRead fail: %08X\n", ret);
+                        sslcDestroyContext(&ctx);
+                        close(s);
+                        delete[] buf;
+                        return -1;
+                    }
+                    if(!ret) break;
+                    
+                    dest += string(buf, buf + ret);
+                }
+                
+                delete[] buf;
+                sslcDestroyContext(&ctx);
+                close(s);
+                
+                return 0;
+            }
+        }
+    }
+}
+

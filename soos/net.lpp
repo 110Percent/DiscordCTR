@@ -1,0 +1,41 @@
+#hdr
+#include <3ds.h>
+
+extern "C"
+{
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdint.h>
+#include <unistd.h>
+#include <string.h>
+#include <errno.h>
+#include <poll.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netdb.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
+#include <fcntl.h>
+
+#include "thing.h"
+}
+
+#include <string>
+#include <functional>
+
+using namespace std;
+#end
+
+
+namespace MM
+{
+    namespace NET
+    {
+        class Socket
+        {
+        protected:
+            int sock;
+        }
+    }
+}

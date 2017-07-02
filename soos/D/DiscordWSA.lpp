@@ -1,0 +1,344 @@
+/*
+    DiscordWSA.lpp - Discord networking handler and abstraction layer
+    Copyright (C) 2017 Sono (https://github.com/MarcuzD)
+    All rights reserved.
+    Source code was only provided for education purposes.
+*/
+
+#hdr
+#include <3ds.h>
+
+extern "C"
+{
+#include <stdio.h>
+#include <stdlib.h>
+#include <stdint.h>
+#include <unistd.h>
+#include <string.h>
+#include <errno.h>
+#include <poll.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netdb.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
+#include <fcntl.h>
+
+
+#include "thing.h"
+}
+
+#include <string>
+#include <sstream>
+#include <functional>
+
+#include "WS/WebSocket.hpp"
+#include "SimpleJSON/JSON.hpp"
+
+
+using namespace std;
+using namespace MM::WS;
+#end
+
+
+namespace MM
+{
+    namespace D
+    {
+        template<typename T>
+        static inline string to_string(const T& n)
+        {
+            std::ostringstream stm;
+            stm << n;
+            return stm.str();
+        }
+        
+        class DiscordWSA
+        {
+        public:
+            WebSocket* ws;
+            
+            //PUBLIC shit
+            
+            string token;
+            string sessid;
+            
+            //INTERNAL shit
+            
+            u32 seq;
+            u32 msec_d;
+            u32 heartbeat_int;
+            
+            int sta;
+            
+            function<void(string& evt, JSONObject& d)> dispatchfunc;
+            
+            DiscordWSA(function<void(string& evt, JSONObject& d)> dispatchfunc) : dispatchfunc(dispatchfunc)
+            {
+                Reset();
+            }
+            
+            void Reset()
+            {
+                seq = 0;
+                msec_d = 0;
+                sta = 0;
+                
+                sessid = "";
+            }
+            
+            void WSCallback(wslay_event_context_ptr ctx, const struct wslay_event_on_msg_recv_arg* arg)
+            {
+                if(arg->opcode != 1) DEBUG("WS handler data: op=%i, datalen=0x%X (%i)\n", arg->opcode, arg->msg_length);
+                
+                
+                JSONValue* jsv = nullptr;
+                
+                if(arg->opcode == 1)
+                {
+                    //printf("WS data: %.*s\n", arg->msg_length, arg->msg);
+                    string str(arg->msg, arg->msg + arg->msg_length);
+                    jsv = JSON::Parse(str.c_str());
+                }
+                else if(arg->opcode == 2)
+                {
+                    puts("WS binary: not supported yet :(");
+                }
+                else if(arg->opcode == 8)
+                {
+                    DEBUG("WS close status=%i\nReason: %.*s\n", arg->status_code, arg->msg_length - 2, arg->msg + 2);
+                    sta &= ~1;
+                    ws->Close();
+                    return;// -1;
+                }
+                else
+                {
+                    DEBUG("WS unimpl op=%i, DC\n", arg->opcode);
+                    ws->Close();
+                    return;// -1;
+                }
+                
+                if(!jsv)
+                {
+                    DEBUG("WS invalid JSON\n%.*s\n================\n", arg->msg_length, arg->msg);
+                    return;// -1;
+                }
+                
+                if(!jsv->IsObject())
+                {
+                    DEBUGS("WS JSON is not Object");
+                    delete jsv;
+                    return;// -1;
+                }
+                
+                int op = (int)((JSONObject&)jsv->AsObject())["op"]->AsNumber();
+                
+                if(op) DEBUG("GW op=%i\n", op);
+                
+                JSONObject resp;
+                int hazresp = 0;
+                
+                switch(op)
+                {
+                    case 0: //DISPATCH
+                    {
+                        u32 cseq = (u32)((JSONObject&)jsv->AsObject())["s"]->AsNumber();
+                        if(seq == cseq)
+                        {
+                            DEBUG("GW seq (%i) eq curr, wat\n", seq);
+                        }
+                        else if(cseq < seq)
+                        {
+                            DEBUG("GW seq back to the future, %i < %i\n", cseq, seq);
+                            seq = cseq;
+                        }
+                        else if(++seq != cseq)
+                        {
+                            DEBUG("GW seq skip %i; %i > %i\n", cseq - seq, cseq, seq);
+                            seq = cseq;
+                        }
+                        
+                        JSONObject& jo = (JSONObject&)((JSONObject&)jsv->AsObject())["d"]->AsObject();
+                        
+                        
+                        SSWITCH(((JSONObject&)jsv->AsObject())["t"]->AsString())
+                        {
+                            //DEBUG("GW DISPATCH '%s'\n", __switch_dummy__.c_str());
+                            
+                            SCASE("READY")
+                            {
+                                sessid = jo["session_id"]->AsString();
+                                DEBUGS("GW TODO MOAR READY");
+                                sta |= 4;
+                                break;
+                            }
+                            SCASE("RESUMED")
+                            {
+                                DEBUGS("GW RESUME SUCC");
+                                sta |= 4;
+                                break;
+                            }
+                            SCASE("MESSAGE_CREATE")
+                            {
+                                string au = "*unknown*";
+                                
+                                if(jo["author"]->IsObject())
+                                {
+                                    JSONObject& author = (JSONObject&)jo["author"]->AsObject();
+                                    
+                                    if(author["username"] && author["username"]->IsString()) au = author["username"]->AsString();
+                                    else au = to_string((unsigned long long)author["id"]->AsNumber());
+                                }
+                                
+                                string msg = jo["content"]->AsString();
+                                
+                                DEBUG("MSG: <%s> %s\n", au.c_str(), msg.c_str());
+                                
+                                break;
+                            }
+                        }
+                        SSEND();
+                        
+                        do
+                        {
+                            string evt = ((JSONObject&)jsv->AsObject())["t"]->AsString();
+                            JSONObject& d = (JSONObject&)((JSONObject&)jsv->AsObject())["d"]->AsObject();
+                            dispatchfunc(evt, d);
+                        }
+                        while(0);
+                        
+                        break;
+                    }
+                    
+                    case 9: //INVALID_SESSION
+                    {
+                        sta &= ~1;
+                        
+                        if(((JSONObject&)jsv->AsObject())["d"]->AsBool())
+                        {
+                            if(sta & 4)
+                            {
+                                DEBUGS("GW INVALID_SESSION second reconnect fail abort");
+                                sta &= ~4;
+                            }
+                            else sta |= 4;
+                        }
+                        else
+                        {
+                            sta &= ~4;
+                            Reset();
+                        }
+                        
+                        ws->Close();
+                        ws->Open();
+                        
+                        DEBUG("GW INVALID_SESSION resume=%s\n", (sta & 4) ? "true" : "false");
+                        
+                        break;
+                    }
+                    
+                    case 10: //HELLO
+                    {
+                        hazresp = 1;
+                        
+                        heartbeat_int = (u32)((JSONObject&)((JSONObject&)jsv->AsObject())["d"]->AsObject())["heartbeat_interval"]->AsNumber();
+                        
+                        DEBUG("GW HELLO heartbeat_int=%u\n", heartbeat_int);
+                        
+                        if(sta & 1)
+                        {
+                            DEBUGS("GW HELLO while connected, wat");
+                        }
+                        
+                        JSONObject d;
+                        
+                        if((sta & 4) && sessid.size())
+                        {
+                            resp["op"] = new JSONValue(6);
+                            
+                            d["token"] = new JSONValue(token);
+                            d["session_id"] = new JSONValue(sessid);
+                            d["seq"] = new JSONValue((int)seq);
+                            DEBUGS("GW try RESUME");
+                        }
+                        else
+                        {
+                            resp["op"] = new JSONValue(2);
+                            
+                            d["token"] = new JSONValue(token);
+                            d["compress"] = new JSONValue(false);
+                            d["large_threshold"] = new JSONValue(50); //3DS pls
+                            d["properties"] =\
+                            JSON::Parse("{\"$os\":\"Nintendo Horizon\",\"$browser\":\"DiscordCTR\",\"$device\":\"Nintendo 3DS\",\"$referrer\":\"\",\"$referring_domain\":\"\"}");
+                            
+                            DEBUGS("GW HELLO!");
+                        }
+                        
+                        resp["d"] = new JSONValue(d);
+                        
+                        sta |= (1 | 2);
+                        
+                        break;
+                    }
+                    
+                    case 11: //ACK
+                    {
+                        DEBUGS("GW got ACK");
+                        sta |= 2;
+                        
+                        break;
+                    }
+                }
+                
+                if(hazresp)
+                {
+                    JSONValue jsv(resp);
+                    string str = jsv.Stringify();
+                    
+                    DEBUG("GW queue text:\n%s\n================\n", str.c_str());
+                    
+                    ws->QueueText(str);
+                }
+                
+                delete jsv;
+                
+                //return 0;
+            }
+            
+            int Tick(u32 d_ms)
+            {
+                if(!(sta & 1)) return 0;
+                
+                msec_d += d_ms;
+                
+                if(msec_d >= heartbeat_int)
+                {
+                    DEBUGS("HEARTBEAT TIME!");
+                    
+                    if(!(sta & 2))
+                    {
+                        DEBUGS("GW ACK timeo");
+                        ws->Close();
+                        sta &= ~1;
+                        return -1;
+                    }
+                    
+                    string str = "{\"op\":1,\"d\":";
+                    str += to_string(seq);
+                    str += "}";
+                    
+                    DEBUG("HEARTBEAT: %s\n", str.c_str());
+                    
+                    ws->QueueText(str);
+                    
+                    sta &= ~2;
+                    msec_d = 0;
+                }
+                
+                return 0;
+            }
+        }
+    }
+}
+
