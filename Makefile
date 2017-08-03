@@ -20,7 +20,7 @@ APP_TITLE       := DiscordCTR
 APP_DESCRIPTION := Discord for Nintendo 3DS
 APP_AUTHOR      := MarcusD
 APP_PRODUCT_CODE:= CTR-P-ADCJ
-APP_UNIQUE_ID   := 0xDFAAF
+APP_UNIQUE_ID   := 0xDF00F
 ICON            := assets/logo.png
 
 APP_TITLE	:= $(shell echo "$(APP_TITLE)" | cut -c1-128)

@@ -54,6 +54,8 @@ namespace MM
             return stm.str();
         }
         
+        
+        typedef function<void(string& evt, JSONObject& d)> DWSADispatchFunc;
         class DiscordWSA
         {
         public:
@@ -72,9 +74,9 @@ namespace MM
             
             int sta;
             
-            function<void(string& evt, JSONObject& d)> dispatchfunc;
+            DWSADispatchFunc dispatchfunc;
             
-            DiscordWSA(function<void(string& evt, JSONObject& d)> dispatchfunc) : dispatchfunc(dispatchfunc)
+            DiscordWSA()
             {
                 Reset();
             }
@@ -170,36 +172,19 @@ namespace MM
                             {
                                 sessid = jo["session_id"]->AsString();
                                 DEBUGS("GW TODO MOAR READY");
-                                sta |= 4;
+                                sta |= 1;
                                 break;
                             }
                             SCASE("RESUMED")
                             {
                                 DEBUGS("GW RESUME SUCC");
-                                sta |= 4;
-                                break;
-                            }
-                            SCASE("MESSAGE_CREATE")
-                            {
-                                string au = "*unknown*";
-                                
-                                if(jo["author"]->IsObject())
-                                {
-                                    JSONObject& author = (JSONObject&)jo["author"]->AsObject();
-                                    
-                                    if(author["username"] && author["username"]->IsString()) au = author["username"]->AsString();
-                                    else au = to_string((unsigned long long)author["id"]->AsNumber());
-                                }
-                                
-                                string msg = jo["content"]->AsString();
-                                
-                                DEBUG("MSG: <%s> %s\n", au.c_str(), msg.c_str());
-                                
+                                sta |= 1;
                                 break;
                             }
                         }
                         SSEND();
                         
+                        if(dispatchfunc)
                         do
                         {
                             string evt = ((JSONObject&)jsv->AsObject())["t"]->AsString();
@@ -234,6 +219,7 @@ namespace MM
                         ws->Open();
                         
                         DEBUG("GW INVALID_SESSION resume=%s\n", (sta & 4) ? "true" : "false");
+                        sta &= ~4;
                         
                         break;
                     }

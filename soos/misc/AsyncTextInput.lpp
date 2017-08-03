@@ -48,13 +48,13 @@ namespace MM
                 if(swkbdInputText(&swkbd, buf, maxlen) != SWKBD_BUTTON_RIGHT) buf[0] = '\0';
                 string ret(buf);
                 delete buf;
-                DEBUGS("swkbd callback");
+                //DEBUGS("swkbd callback");
                 cb(ret);
-                DEBUGS("swkbd callback done");
+                //DEBUGS("swkbd callback done");
                 initial.clear();
                 initial.shrink_to_fit();
                 th = nullptr;
-                DEBUGS("swkbd died");
+                //DEBUGS("swkbd died");
             }
             
         public:

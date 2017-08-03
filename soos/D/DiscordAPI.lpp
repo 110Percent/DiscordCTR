@@ -47,7 +47,7 @@ namespace MM
     namespace D
     {
         typedef u64 Snowflake;
-        static inline Snowflake strtosnow(const string& str)
+        Snowflake strtosnow(const string& str)
         {
             return strtoull(str.c_str(), nullptr, 10);
         }
@@ -278,6 +278,16 @@ namespace MM
                 }
             }
         }
+        class DiscordEmoji
+        {
+        public:
+            Snowflake ID;
+            
+            void Parse(JSONObject& o)
+            {
+                if(o.count("id")) ID = strtosnow(o.at("id")->AsString());
+            }
+        }
         class DiscordServer
         {
         public:
@@ -288,7 +298,7 @@ namespace MM
             string icon;
             map<Snowflake, DiscordChannel> channels;
             map<Snowflake, DiscordRole> roles;
-            //map<Snowflake, DiscordEmoji> emoji;
+            map<Snowflake, DiscordEmoji> emoji;
             
             void Parse(JSONObject& o)
             {
@@ -320,9 +330,8 @@ namespace MM
                         roles[id].Parse(jo);
                     }
                 }
-                /*if(o.count("emojis"))
+                if(o.count("emojis"))
                 {
-                    DEBUGS("- - Pre-parse emoji");
                     for(JSONValue* v : o.at("emojis")->AsArray())
                     {
                         if(!v) continue;
@@ -331,7 +340,7 @@ namespace MM
                         Snowflake id = strtosnow(jo.at("id")->AsString());
                         emoji[id].Parse(jo);
                     }
-                }*/
+                }
             }
         }
         
@@ -341,7 +350,7 @@ namespace MM
         private:
             map<Snowflake, map<Snowflake, DiscordChannel>::iterator> channels;
             map<Snowflake, map<Snowflake, DiscordRole>::iterator> roles;
-            //map<Snowflake, map<Snowflake, DiscordEmoji>::iterator> emoji;
+            map<Snowflake, map<Snowflake, DiscordEmoji>::iterator> emoji;
             
         public:
             WebSocket* ws;
@@ -367,26 +376,26 @@ namespace MM
             
             void Reset()
             {
-                if(!channels.empty()) channels.clear();
-                if(!roles.empty()) roles.clear();
-                //if(!emoji.emtpy()) emoji.clear();
-                if(!servers.empty()) servers.clear();
-                if(!users.empty()) users.clear();
-                if(!PMs.empty()) PMs.clear();
+                channels.clear();
+                roles.clear();
+                emoji.clear();
+                servers.clear();
+                users.clear();
+                PMs.clear();
             }
             
             void AddChannel(map<Snowflake, DiscordChannel>::iterator i) { channels[i->first] = i; }
             void AddRole(map<Snowflake, DiscordRole>::iterator i) { roles[i->first] = i; }
-            //void AddEmoji(map<Snowflake, DiscordEmoji>::iterator i) { emoji[i->first] = i; }
+            void AddEmoji(map<Snowflake, DiscordEmoji>::iterator i) { emoji[i->first] = i; }
             DiscordChannel* GetChannel(Snowflake id) { return &channels[id]->second; }
             DiscordRole* GetRole(Snowflake id) { return &roles[id]->second; }
-            //DiscordEmoji* GetEmoji(Snowflake id) { return &emoji[id]->second; }
+            DiscordEmoji* GetEmoji(Snowflake id) { return &emoji[id]->second; }
             bool HasChannel(Snowflake id) { return channels.count(id) ? true : false; }
             bool HasRole(Snowflake id) { return roles.count(id) ? true : false; }
-            //bool HasEmoji(Snowflake id) { return emoji.count(id) ? true : false; }
+            bool HasEmoji(Snowflake id) { return emoji.count(id) ? true : false; }
             void EraseChannel(Snowflake id) { channels.erase(id); }
             void EraseRole(Snowflake id) { roles.erase(id); }
-            //void EraseEmoji(Snowflake id) { emoji.erase(id); }
+            void EraseEmoji(Snowflake id) { emoji.erase(id); }
             
             void DispatchMessage(string& evt, JSONObject& d)
             {
@@ -410,7 +419,6 @@ namespace MM
                         }
                         if(d.count("private_channels"))
                         {
-                            DEBUGS("Pre-parse private channels");
                             for(JSONValue* v : d.at("private_channels")->AsArray())
                             {
                                 if(!v) continue;
@@ -433,7 +441,7 @@ namespace MM
                                 DiscordServer& s = servers[id];
                                 {auto it = s.channels.begin(); auto end = s.channels.end(); for(; it != end; it++) AddChannel(it);}
                                 {auto it = s.roles.begin(); auto end = s.roles.end(); for(; it != end; it++) AddRole(it);}
-                                //{auto it = s.emoji.begin(); auto end = s.emoji.end(); for(; it != end; it++) AddEmoji(it);}
+                                {auto it = s.emoji.begin(); auto end = s.emoji.end(); for(; it != end; it++) AddEmoji(it);}
                             }
                         }
                         
@@ -511,7 +519,7 @@ namespace MM
                         {
                             for(auto it : servers[id].channels) EraseChannel(it.first);
                             for(auto it : servers[id].roles) EraseRole(it.first);
-                            //for(auto it : servers[id].emoji) EraseEmoji(it.first);
+                            for(auto it : servers[id].emoji) EraseEmoji(it.first);
                             
                             servers.erase(id);
                         }

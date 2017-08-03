@@ -22,7 +22,8 @@ extern "C"
 }
 
 #include <string>
-#include <functional>
+#include <map>
+#include <vector>
 
 using namespace std;
 #end
@@ -32,10 +33,64 @@ namespace MM
 {
     namespace NET
     {
-        class Socket
+        class HTTPC
         {
-        protected:
-            int sock;
+        public:
+            map<string, string> reqhdr;
+            map<string, string> reshdr;
+            string rawreshdr;
+            
+            string reqmeth;
+            
+            string respstat;
+            u32 respcode;
+            
+            string addr;
+            u16 port;
+            
+            s64 resplen;
+            string respbuf;
+            
+            HTTPC()
+            {
+                FullReset();
+            }
+            
+            void FullReset()
+            {
+                reshdr.clear();
+                rawreshdr.clear();
+                rawreshdr.shrink_to_fit();
+                
+                port = 80;
+                reqmeth = "GET";
+            }
+            
+            void Reset()
+            {
+                resplen = 0LL;
+                respcode = 0;
+                respstat.clear();
+                respbuf.clear();
+                respbuf.shrink_to_fit();
+            }
+            
+            void ResetHeader()
+            {
+                reqhdr.clear();
+            }
+            
+            void SetAddr(const string& _addr)
+            {
+                addr = _addr;
+            }
+            
+            void SetPort(u16 _port)
+            {
+                port = _port;
+            }
+            
+            
         }
     }
 }

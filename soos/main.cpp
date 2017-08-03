@@ -105,7 +105,7 @@ void _ded()
     }
     catch(const char* str)
     {
-        printf("cstr: '%s'\n", str);
+        printf("char*: '%s'\n", str);
     }
     catch(Result res)
     {
@@ -165,6 +165,33 @@ void WSAHandler(wslay_event_context_ptr ctx, const struct wslay_event_on_msg_rec
 void wsahandler_lol(string& evt, JSONObject& d)
 {
     dapi->DispatchMessage(evt, d);
+    
+    SSWITCH(evt)
+    {
+        SCASE("MESSAGE_CREATE")
+        {
+            if(!sc) break;
+            Snowflake cid = MM::D::strtosnow(d.at("channel_id")->AsString());
+            if(sc != cid) break;
+            
+            string au = "*unknown*";
+            
+            if(d.at("author")->IsObject())
+            {
+                JSONObject& author = (JSONObject&)d.at("author")->AsObject();
+                
+                if(author.count("username") && author.at("username")->IsString()) au = author.at("username")->AsString();
+                else au = to_string((unsigned long long)author.at("id")->AsNumber());
+            }
+            
+            string msg = d.at("content")->AsString();
+            
+            DEBUG("<%s> %s\n", au.c_str(), msg.c_str());
+            
+            break;
+        }
+    }
+    SSEND();
 }
 
 
@@ -264,8 +291,10 @@ int main()
     
     dapi = new DiscordAPI;
     
-    dsa = new DiscordWSA(wsahandler_lol);
-    wsa = WSHelper::CreateWSS(WSAHandler, "gateway.discord.gg", "?v=5&encoding=json");
+    dsa = new DiscordWSA();
+    dsa->dispatchfunc = wsahandler_lol;
+    wsa = WSHelper::CreateWSS("gateway.discord.gg", "?v=5&encoding=json");
+    wsa->msghandler = WSAHandler;
     dsa->ws = wsa;
     dsa->token = token;
     dapi->token = token;
@@ -457,7 +486,7 @@ int main()
             drawstring(">", 0, 0, 0, 2, 2);
             for(auto it : dapi->servers)
             {
-                drawstring(" - " + it.second.name, 0, py, 0, 2, 2);
+                drawstring(" - " + it.second.name, 0, py, it.second.down ? 0xFF : 0, 2, 2);
                 py += 16;
                 if(py >= 240) break;
             }
