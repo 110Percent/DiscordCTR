@@ -27,6 +27,13 @@
 
 #include "JSON.hpp"
 
+#include <3ds.h>
+extern "C"
+{
+#include <stdio.h>
+#include <string.h>
+}
+
 /**
  * Blocks off the public constructor
  *
@@ -146,28 +153,82 @@ bool JSON::ExtractString(const char **data, std::string &str)
 						return false;
 					
 					// Deal with the chars
-					next_char = 0;
+					next_char = '?';
+                    u16 next_ch = 0;
 					for (int i = 0; i < 4; i++)
 					{
 						// Do it first to move off the 'u' and leave us on the
 						// final hex digit as we move on by one later on
 						(*data)++;
 						
-						next_char <<= 4;
+						next_ch <<= 4;
 						
 						// Parse the hex digit
 						if (**data >= '0' && **data <= '9')
-							next_char |= (**data - '0');
+							next_ch |= (**data - '0');
 						else if (**data >= 'A' && **data <= 'F')
-							next_char |= (10 + (**data - 'A'));
+							next_ch |= (10 + (**data - 'A'));
 						else if (**data >= 'a' && **data <= 'f')
-							next_char |= (10 + (**data - 'a'));
+							next_ch |= (10 + (**data - 'a'));
 						else
 						{
 							// Invalid hex digit = invalid JSON
 							return false;
 						}
 					}
+                    u16 enc_ch[2];
+                    enc_ch[0] = next_ch;
+                    enc_ch[1] = 0;
+                    u32 c = 0;
+                    u8 ca[8];
+                    
+                    int enc_amt = decode_utf16(&c, enc_ch);
+                    if(enc_amt == -1 && (*data)[0] == '\\' && (*data)[1] == 'u')
+                    {
+                        u16 ext_ch = 0;
+                        const char* _ata = (*data) + 1;
+                        const char** ata = &_ata;
+                        for (int i = 0; i < 4; i++)
+                        {
+                            // Do it first to move off the 'u' and leave us on the
+                            // final hex digit as we move on by one later on
+                            (*ata)++;
+                            
+                            ext_ch <<= 4;
+                            
+                            // Parse the hex digit
+                            if (**ata >= '0' && **ata <= '9')
+                                ext_ch |= (**ata - '0');
+                            else if (**ata >= 'A' && **ata <= 'F')
+                                ext_ch |= (10 + (**ata - 'A'));
+                            else if (**ata >= 'a' && **ata <= 'f')
+                                ext_ch |= (10 + (**ata - 'a'));
+                            else
+                            {
+                                // Invalid hex digit = invalid JSON
+                                return false;
+                            }
+                        }
+                        enc_ch[1] = ext_ch;
+                        
+                        enc_amt = decode_utf16(&c, enc_ch);
+                    }
+                    if(enc_amt == -1)
+                    {
+                        printf("JSON invalid u16 %04X %04X\n", enc_ch[0], enc_ch[1]);
+                        break;
+                    }
+                    enc_amt = encode_utf8(ca, c);
+                    if(enc_amt == -1)
+                    {
+                        printf("JSON invalid u32 %08X\n", c);
+                        break;
+                    }
+                    enc_amt--;
+                    for(int ech = 0; ech != enc_amt; ech++) str += ca[ech];
+                    next_char = ca[enc_amt];
+                    
+                    
 					break;
 				}
 				
